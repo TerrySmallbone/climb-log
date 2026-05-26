@@ -1,0 +1,321 @@
+---
+import Layout from '../layouts/Layout.astro'
+import { env } from 'cloudflare:workers'
+
+export const prerender = false
+
+const DB = env.DB as D1Database | undefined
+
+let peaks: any[] = []
+let stats = { total: 0, completed: 0, fourteeners: 0, thirteeners: 0 }
+
+if (DB) {
+  const result = await DB.prepare(`
+    SELECT id, title, elevation, range, first_completed, rank, img
+    FROM peaks 
+    ORDER BY elevation DESC
+  `).all()
+  peaks = result.results || []
+
+  stats.total = peaks.length
+  stats.completed = peaks.filter(p => p.first_completed).length
+  stats.fourteeners = peaks.filter(p => p.elevation >= 14000 && p.first_completed).length
+  stats.thirteeners = peaks.filter(p => p.elevation >= 13000 && p.elevation < 14000 && p.first_completed).length
+}
+
+function formatDate(dateStr: string | null) {
+  if (!dateStr) return null
+  const date = new Date(dateStr)
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function formatElevation(feet: number) {
+  return feet.toLocaleString() + "'"
+}
+---
+
+<Layout title="Peak List" description="Peaks I've summited in Colorado and beyond." ogImage="https://kylies.photos/open-graph/peak-list.jpg">
+  <div class="container page">
+    <h1>Peak List</h1>
+    <p style="color: var(--color-text-secondary); margin-bottom: var(--space-xl);">
+      Tracking my progress on Colorado's highest peaks.
+    </p>
+
+    <!-- Stats -->
+    <section class="stats-row mb-xl">
+      <div class="stat-item">
+        <div class="stat-number">{stats.completed}</div>
+        <div class="stat-name">Peaks Summited</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-number">{stats.fourteeners}</div>
+        <div class="stat-name">14ers</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-number">{stats.thirteeners}</div>
+        <div class="stat-name">13ers</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-number">{stats.total}</div>
+        <div class="stat-name">On List</div>
+      </div>
+    </section>
+
+    <!-- Filter Controls -->
+    <div class="filter-controls">
+      <button class="filter-btn active" data-filter="all">All Peaks</button>
+      <button class="filter-btn" data-filter="14er">14ers Only</button>
+      <button class="filter-btn" data-filter="13er">13ers Only</button>
+    </div>
+    <p class="filter-count">Showing <span id="visible-count">{peaks.length}</span> of {peaks.length} peaks</p>
+
+    <!-- Peak Grid with Photos -->
+    <div class="peak-grid" id="peak-grid">
+      {peaks.map((peak) => (
+        <div class={`peak-card ${peak.first_completed ? '' : 'not-completed'}`} data-elevation={peak.elevation}>
+          {peak.img ? (
+            <div class="peak-image">
+              <img 
+                src={peak.img} 
+                alt={peak.title || 'Peak photo'}
+                loading="lazy"
+                onerror="this.style.display='none'; this.parentElement.classList.add('no-image')"
+              />
+            </div>
+          ) : (
+            <div class="peak-image no-image">
+              <span class="peak-elevation-display">{formatElevation(peak.elevation)}</span>
+            </div>
+          )}
+          <div class="peak-info">
+            <div class="peak-header">
+              <h3>{peak.title}</h3>
+              {peak.elevation >= 14000 && <span class="badge">14er</span>}
+            </div>
+            <div class="peak-meta">
+              <span>{peak.range || 'Unknown range'}</span>
+              <span style="color: var(--color-text-tertiary);">{formatElevation(peak.elevation)}</span>
+            </div>
+            {peak.first_completed ? (
+              <div class="peak-date">First summit: {formatDate(peak.first_completed)}</div>
+            ) : (
+              <div class="peak-date pending">Not yet summited</div>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+
+  <style>
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: var(--space-xl);
+      padding: var(--space-2xl) 0;
+      border-bottom: 1px solid var(--color-border);
+    }
+    .stat-item {
+      text-align: center;
+    }
+    .stat-number {
+      font-family: var(--font-serif);
+      font-size: 2.5rem;
+      font-weight: 600;
+      color: var(--color-text-accent);
+      line-height: 1.1;
+    }
+    .stat-name {
+      font-size: 0.75rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--color-text-tertiary);
+      margin-top: var(--space-xs);
+    }
+
+    @media (max-width: 768px) {
+      .stats-row {
+        grid-template-columns: repeat(2, 1fr);
+        gap: var(--space-lg);
+      }
+      .stat-number {
+        font-size: 2rem;
+      }
+    }
+
+    .badge {
+      display: inline-block;
+      font-size: 0.625rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      background: var(--color-accent);
+      color: white;
+      padding: 0.125rem 0.375rem;
+      border-radius: 0.25rem;
+      margin-left: 0.5rem;
+      vertical-align: middle;
+    }
+    .peak-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: var(--space-lg);
+    }
+    .peak-card {
+      background: var(--color-bg-card);
+      border-radius: var(--border-radius-lg);
+      overflow: hidden;
+      box-shadow: var(--shadow-sm);
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+      border: 1px solid var(--color-border);
+    }
+    .peak-card:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-md);
+    }
+    .peak-card.not-completed {
+      opacity: 0.6;
+    }
+    .peak-card.not-completed:hover {
+      opacity: 0.85;
+    }
+    .peak-image {
+      width: 100%;
+      height: 180px;
+      overflow: hidden;
+      background: linear-gradient(135deg, var(--color-bg-secondary), var(--color-bg-tertiary));
+      position: relative;
+    }
+    .peak-image img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transition: transform 0.3s ease;
+    }
+    .peak-card:hover .peak-image img {
+      transform: scale(1.05);
+    }
+    .peak-image.no-image {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .peak-elevation-display {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--color-text-tertiary);
+      font-family: var(--font-serif);
+    }
+    .peak-info {
+      padding: var(--space-md);
+    }
+    .peak-header {
+      display: flex;
+      align-items: center;
+      gap: var(--space-xs);
+      margin-bottom: var(--space-sm);
+    }
+    .peak-header h3 {
+      margin: 0;
+      font-size: var(--font-size-lg);
+      font-weight: 600;
+    }
+    .peak-meta {
+      display: flex;
+      justify-content: space-between;
+      font-size: var(--font-size-sm);
+      color: var(--color-text-secondary);
+      margin-bottom: var(--space-sm);
+    }
+    .peak-date {
+      font-size: var(--font-size-sm);
+      color: var(--color-text-accent);
+    }
+    .peak-date.pending {
+      color: var(--color-text-tertiary);
+      font-style: italic;
+    }
+
+    .filter-controls {
+      display: flex;
+      gap: var(--space-md);
+      justify-content: center;
+      margin-bottom: var(--space-md);
+      padding-top: var(--space-xl);
+    }
+
+    .filter-btn {
+      padding: var(--space-sm) var(--space-lg);
+      border: 2px solid var(--color-border);
+      background: var(--color-bg-card);
+      color: var(--color-text);
+      border-radius: var(--border-radius);
+      cursor: pointer;
+      font-weight: 500;
+      font-family: inherit;
+      font-size: var(--font-size-sm);
+      transition: all 0.2s ease;
+    }
+
+    .filter-btn:hover {
+      border-color: var(--color-accent);
+    }
+
+    .filter-btn.active {
+      background: var(--color-accent);
+      color: white;
+      border-color: var(--color-accent);
+    }
+
+    .filter-count {
+      text-align: center;
+      font-size: var(--font-size-sm);
+      color: var(--color-text-tertiary);
+      margin-bottom: var(--space-xl);
+    }
+
+    @media (max-width: 768px) {
+      .filter-controls {
+        flex-wrap: wrap;
+      }
+    }
+  </style>
+
+  <script>
+    const buttons = document.querySelectorAll('.filter-btn')
+    const cards = document.querySelectorAll('.peak-card')
+    const countEl = document.getElementById('visible-count')
+    const totalCards = cards.length
+
+    function updateCount() {
+      const visible = Array.from(cards).filter(c => c.style.display !== 'none').length
+      if (countEl) countEl.textContent = visible
+    }
+
+    buttons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const filter = btn.dataset.filter
+
+        // Update active button
+        buttons.forEach(b => b.classList.remove('active'))
+        btn.classList.add('active')
+
+        // Filter cards
+        cards.forEach(card => {
+          const elevation = parseInt(card.dataset.elevation || '0')
+          let show = true
+
+          if (filter === '14er') {
+            show = elevation >= 14000
+          } else if (filter === '13er') {
+            show = elevation >= 13000 && elevation < 14000
+          }
+
+          card.style.display = show ? '' : 'none'
+        })
+
+        updateCount()
+      })
+    })
+  </script>
+</Layout>

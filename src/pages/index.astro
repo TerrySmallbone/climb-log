@@ -1,0 +1,320 @@
+---
+import Layout from '../layouts/Layout.astro'
+import { fillMissingPreviewImages } from '../lib/photo-fallbacks'
+import { env } from 'cloudflare:workers'
+
+export const prerender = false
+
+const DB = env.DB as D1Database | undefined
+
+let recentClimbs: any[] = []
+let heroPhotos: { short_id: string; accent_color: string | null }[] = []
+let heroAccentColor: string | null = null
+let stats = { totalClimbs: 0, totalPeaks: 0, totalMiles: 0, totalGain: 0 }
+
+if (DB) {
+  try {
+    // Fetch recent climbs
+    const climbsResult = await DB.prepare(
+      'SELECT id, date, title, slug, preview_img_url, distance, gain, area, state FROM climbs ORDER BY date DESC LIMIT 5'
+    ).all()
+    recentClimbs = climbsResult.results || []
+
+    // Fill missing preview images from photos table
+    await fillMissingPreviewImages(DB, recentClimbs, 800)
+
+    // Fetch hero photos (last 5 from photos table)
+    const photosResult = await DB.prepare(
+      'SELECT short_id, accent_color, src FROM photos WHERE exclude = 0 ORDER BY date DESC LIMIT 5'
+    ).all()
+    heroPhotos = (photosResult.results || [])
+      .filter((p: any) => p.short_id)
+      .map((p: any) => ({ short_id: p.short_id, accent_color: p.accent_color }))
+
+    // Fetch stats
+    const statsResult = await DB.prepare(`
+      SELECT 
+        (SELECT COUNT(*) FROM climbs) as totalClimbs,
+        (SELECT COUNT(*) FROM peaks WHERE first_completed IS NOT NULL) as totalPeaks,
+        (SELECT COALESCE(SUM(distance), 0) FROM climbs) as totalMiles,
+        (SELECT COALESCE(SUM(gain), 0) FROM climbs) as totalGain
+    `).first()
+    
+    if (statsResult) {
+      stats = {
+        totalClimbs: statsResult.totalClimbs || 0,
+        totalPeaks: statsResult.totalPeaks || 0,
+        totalMiles: Math.round(statsResult.totalMiles || 0),
+        totalGain: Math.round(statsResult.totalGain || 0),
+      }
+    }
+  } catch (e) {
+    console.error('Failed to fetch data:', e)
+  }
+}
+
+function formatNumber(n: number): string {
+  return n.toLocaleString()
+}
+---
+
+<Layout title="Home" description="Kylie's climbing and hiking adventures in Colorado and beyond." ogImage="https://kylies.photos/open-graph/home.jpg">
+  <!-- Hero -->
+  <section class="hero" data-photos={JSON.stringify(heroPhotos.map(p => p.short_id))} data-accents={JSON.stringify(Object.fromEntries(heroPhotos.map(p => [p.short_id, p.accent_color])))}>
+    <div class="hero-image" id="hero-image"></div>
+    <div class="hero-overlay"></div>
+    <div class="hero-content">
+      <h1>kylies.photos</h1>
+      <p>Climbing, hiking, and exploring the mountains of Colorado and beyond.</p>
+    </div>
+  </section>
+
+  <div class="container page">
+    <!-- Stats -->
+    <section class="stats-row mb-xl">
+      <div class="stat-item">
+        <div class="stat-number">{formatNumber(stats.totalClimbs)}</div>
+        <div class="stat-name">Climbs</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-number">{formatNumber(stats.totalPeaks)}</div>
+        <div class="stat-name">Peaks Summited</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-number">{formatNumber(stats.totalMiles)}</div>
+        <div class="stat-name">Miles Hiked</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-number">{formatNumber(stats.totalGain)}'</div>
+        <div class="stat-name">Elevation Gained</div>
+      </div>
+    </section>
+
+    <!-- Recent Climbs -->
+    <section>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-lg);">
+        <h2 style="margin: 0; font-family: var(--font-serif);">Recent Climbs</h2>
+        <a href="/climbs" class="btn">View All →</a>
+      </div>
+
+      {recentClimbs.length > 0 ? (
+        <div class="climb-card-grid">
+          {recentClimbs.slice(0, 3).map((climb) => (
+            <a href={climb.slug ? `/blog/hike/${climb.slug}` : '/climbs'} class="climb-card">
+              <div class="climb-card-image">
+                {climb.preview_img_url ? (
+                  <img 
+                    src={climb.preview_img_url} 
+                    alt={climb.title || 'Climb photo'} 
+                    loading="lazy"
+                    onerror="this.style.opacity='0'; this.parentElement.style.background='var(--color-bg-tertiary)'; this.parentElement.style.display='flex'; this.parentElement.style.alignItems='center'; this.parentElement.style.justifyContent='center'; this.parentElement.innerHTML='<span style=font-size:14px>🏔️</span>'"
+                  />
+                ) : (
+                  <div class="climb-card-image-placeholder" />
+                )}
+              </div>
+              <div class="climb-card-content">
+                <h3>{climb.title || 'Untitled'}</h3>
+                <p class="climb-card-meta">
+                  {climb.date && new Date(climb.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  {climb.area && ` · ${climb.area}`}
+                </p>
+                {climb.distance && climb.gain && (
+                  <p class="climb-card-stats">
+                    {climb.distance} mi · {formatNumber(climb.gain)}' gain
+                  </p>
+                )}
+              </div>
+            </a>
+          ))}
+        </div>
+      ) : (
+        <p>No climbs found. <a href="/climbs">View climb log</a></p>
+      )}
+    </section>
+  </div>
+
+  <script>
+    // Cycle hero image through last 5 photos
+    const heroSection = document.querySelector('.hero');
+    const heroImage = document.getElementById('hero-image');
+    if (heroSection && heroImage) {
+      const photos = JSON.parse(heroSection.dataset.photos || '[]');
+      const accents = JSON.parse(heroSection.dataset.accents || '{}');
+      if (photos.length > 0) {
+        const randomPhoto = photos[Math.floor(Math.random() * photos.length)];
+        heroImage.style.backgroundImage = `url(/img/${randomPhoto}?w=1600)`;
+        // Apply accent color of the SELECTED photo to stat numbers
+        const accentColor = accents[randomPhoto];
+        if (accentColor) {
+          document.querySelectorAll('.stat-number').forEach(el => {
+            (el as HTMLElement).style.color = accentColor;
+          });
+        }
+      }
+    }
+  </script>
+
+  <style>
+    .hero {
+      position: relative;
+      width: 100%;
+      height: 60vh;
+      min-height: 400px;
+      max-height: 700px;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .hero-image {
+      position: absolute;
+      inset: 0;
+      background-size: cover;
+      background-position: center;
+      transition: opacity 0.5s ease;
+    }
+    .hero-overlay {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.35) 0%, rgba(0,0,0,0.25) 40%, rgba(0,0,0,0.5) 70%, var(--color-bg-primary) 100%);
+    }
+    .hero-content {
+      position: relative;
+      z-index: 2;
+      text-align: center;
+      color: white;
+      padding: var(--space-lg);
+    }
+    .hero-content h1 {
+      font-family: var(--font-serif);
+      font-style: italic;
+      font-size: clamp(3rem, 8vw, 6.5rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1;
+      margin-bottom: var(--space-md);
+      color: #ffffff;
+      text-shadow: 0 4px 24px rgba(0,0,0,0.45);
+    }
+    .hero-content p {
+      font-size: 1.25rem;
+      max-width: 500px;
+      margin: 0 auto;
+      color: #ffffff;
+      opacity: 0.95;
+      text-shadow: 0 1px 6px rgba(0,0,0,0.4);
+      text-transform: lowercase;
+    }
+
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: var(--space-xl);
+      padding: var(--space-2xl) 0;
+      border-bottom: 1px solid var(--color-border);
+    }
+    .stat-item {
+      text-align: center;
+    }
+    .stat-number {
+      font-family: var(--font-serif);
+      font-size: 2.5rem;
+      font-weight: 600;
+      color: var(--color-text-accent);
+      line-height: 1.1;
+      transition: color 0.3s ease;
+    }
+    .stat-name {
+      font-size: 0.75rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--color-text-tertiary);
+      margin-top: var(--space-xs);
+    }
+
+    .climb-card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: var(--space-lg);
+    }
+    .climb-card {
+      display: block;
+      background: var(--color-bg-primary);
+      border-radius: var(--border-radius-lg);
+      overflow: hidden;
+      border: 1px solid var(--color-border);
+      text-decoration: none;
+      color: inherit;
+      transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+    }
+    .climb-card:hover {
+      transform: translateY(-3px);
+      box-shadow: var(--shadow-md);
+      border-color: var(--color-border-hover);
+    }
+    .climb-card-image {
+      width: 100%;
+      height: 200px;
+      overflow: hidden;
+      background: var(--color-bg-secondary);
+    }
+    .climb-card-image img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transition: transform 0.3s ease;
+    }
+    .climb-card:hover .climb-card-image img {
+      transform: scale(1.05);
+    }
+    .climb-card-image-placeholder {
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(135deg, var(--color-bg-secondary), var(--color-bg-tertiary));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .climb-card-content {
+      padding: var(--space-md);
+    }
+    .climb-card-content h3 {
+      margin: 0 0 var(--space-sm);
+      font-size: var(--font-size-lg);
+      font-weight: 600;
+      color: var(--color-text-primary);
+    }
+    .climb-card-meta {
+      font-size: var(--font-size-sm);
+      color: var(--color-text-tertiary);
+      margin: 0 0 var(--space-xs);
+    }
+    .climb-card-stats {
+      font-size: var(--font-size-sm);
+      color: var(--color-text-secondary);
+      margin: 0;
+    }
+
+    @media (max-width: 768px) {
+      .hero {
+        height: 50vh;
+        min-height: 300px;
+      }
+      .hero-content h1 {
+        font-size: 2.75rem;
+      }
+      .stats-row {
+        grid-template-columns: repeat(2, 1fr);
+        gap: var(--space-lg);
+      }
+      .stat-number {
+        font-size: 2rem;
+      }
+      .climb-card-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</Layout>
