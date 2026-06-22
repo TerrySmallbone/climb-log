@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "climb-log",
-  "account_id": "bb52c0e5f3a93fc72779915d7dc6982b",
+  "account_id": "3bb724109514a76810f72292a57f167c",
   "compatibility_date": "2025-05-23",
   "compatibility_flags": ["nodejs_compat_v2"],
   "workers_dev": true,
